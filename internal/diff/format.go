@@ -2,47 +2,87 @@ package diff
 
 import (
 	"fmt"
-	"io"
 	"strings"
+
+	"github.com/fatih/color"
 )
 
-// Format controls how the diff output is rendered.
-type Format string
-
-const (
-	FormatText Format = "text"
-	FormatJSON Format = "json"
+var (
+	addedColor    = color.New(color.FgGreen)
+	removedColor  = color.New(color.FgRed)
+	modifiedColor = color.New(color.FgYellow)
+	headerColor   = color.New(color.FgCyan, color.Bold)
 )
 
-// Render writes a human-readable diff to w.
-func Render(w io.Writer, r *Result) {
-	fmt.Fprintf(w, "--- %s/%s (v%d)\n", r.Mount, r.Path, r.OldVersion)
-	fmt.Fprintf(w, "+++ %s/%s (v%d)\n", r.Mount, r.Path, r.NewVersion)
-
-	if !r.HasChanges() {
-		fmt.Fprintln(w, "(no changes)")
-		return
-	}
-
-	for _, c := range r.Changes {
-		switch c.Change {
-		case Added:
-			fmt.Fprintf(w, "+ %-30s = %s\n", c.Key, maskValue(c.NewValue))
-		case Removed:
-			fmt.Fprintf(w, "- %-30s = %s\n", c.Key, maskValue(c.OldValue))
-		case Modified:
-			fmt.Fprintf(w, "~ %-30s : %s -> %s\n", c.Key, maskValue(c.OldValue), maskValue(c.NewValue))
-		}
-	}
+// RenderOptions controls how the diff output is formatted.
+type RenderOptions struct {
+	MaskSecrets bool
+	Colorize    bool
 }
 
-// maskValue replaces the content of a secret value with asterisks,
-// preserving only the length hint.
+// Render formats a slice of Change records into a human-readable diff string.
+func Render(changes []Change, opts RenderOptions) string {
+	if len(changes) == 0 {
+		return "No changes detected.\n"
+	}
+
+	var sb strings.Builder
+
+	for _, c := range changes {
+		switch c.Type {
+		case ChangeAdded:
+			line := fmt.Sprintf("+ %s = %s\n", c.Key, displayValue(c.NewValue, opts.MaskSecrets))
+			if opts.Colorize {
+				addedColor.Fprint(&sb, line)
+			} else {
+				sb.WriteString(line)
+			}
+		case ChangeRemoved:
+			line := fmt.Sprintf("- %s = %s\n", c.Key, displayValue(c.OldValue, opts.MaskSecrets))
+			if opts.Colorize {
+				removedColor.Fprint(&sb, line)
+			} else {
+				sb.WriteString(line)
+			}
+		case ChangeModified:
+			oldVal := displayValue(c.OldValue, opts.MaskSecrets)
+			newVal := displayValue(c.NewValue, opts.MaskSecrets)
+			line := fmt.Sprintf("~ %s: %s => %s\n", c.Key, oldVal, newVal)
+			if opts.Colorize {
+				modifiedColor.Fprint(&sb, line)
+			} else {
+				sb.WriteString(line)
+			}
+		}
+	}
+
+	return sb.String()
+}
+
+// RenderHeader prints a summary header for a diff operation.
+func RenderHeader(path string, versionA, versionB int, colorize bool) string {
+	line := fmt.Sprintf("=== %s (v%d → v%d) ===\n", path, versionA, versionB)
+	if colorize {
+		var sb strings.Builder
+		headerColor.Fprint(&sb, line)
+		return sb.String()
+	}
+	return line
+}
+
+func displayValue(v string, mask bool) string {
+	if !mask {
+		return v
+	}
+	return maskValue(v)
+}
+
 func maskValue(v string) string {
 	if len(v) == 0 {
-		return `""`
+		return ""
 	}
-	return "[" + strings.Repeat("*", min(len(v), 8)) + "]"
+	visible := min(3, len(v))
+	return v[:visible] + strings.Repeat("*", len(v)-visible)
 }
 
 func min(a, b int) int {
